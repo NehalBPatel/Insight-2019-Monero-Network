@@ -466,6 +466,9 @@ namespace cryptonote
       drop_connection(context, true, false);
       return 1;
     }
+
+    m_mon->track_block(context, pblocks[0]);
+
     if(bvc.m_added_to_main_chain)
     {
       //TODO: Add here announce protocol usage
@@ -739,6 +742,9 @@ namespace cryptonote
           drop_connection(context, true, false);
           return 1;
         }
+
+        m_mon->track_block(context, pblocks[0]);
+
         if( bvc.m_added_to_main_chain )
         {
           //TODO: Add here announce protocol usage

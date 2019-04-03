@@ -56,6 +56,10 @@
 #include "net/fwd.h"
 #include "common/command_line.h"
 
+// np debug
+#include "monitor/monero_monitor.h"
+// end np debug
+
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
 
@@ -190,7 +194,7 @@ namespace nodetool
       std::atomic<unsigned int> m_current_number_of_out_peers;
       std::atomic<unsigned int> m_current_number_of_in_peers;
       bool m_can_pingback;
-
+      
     private:
       void set_config_defaults() noexcept
       {
@@ -231,7 +235,10 @@ namespace nodetool
     bool send_stop_signal();
     uint32_t get_this_peer_port(){return m_listening_port;}
     t_payload_net_handler& get_payload_object();
-
+    // np debug
+    void set_monitor(std::shared_ptr<monero_mntr::monero_monitor>& mon){ m_mon = mon; m_payload_handler.set_monitor(mon); }
+    // np debug
+    
     // debug functions
     bool log_peerlist();
     bool log_connections();
@@ -422,6 +429,9 @@ namespace nodetool
     std::atomic<bool> m_save_graph;
     std::atomic<bool> is_closing;
     std::unique_ptr<boost::thread> mPeersLoggerThread;
+    // np debug
+    std::shared_ptr<monero_mntr::monero_monitor> m_mon;
+    // end np debug
     //critical_section m_connections_lock;
     //connections_indexed_container m_connections;
 
@@ -478,6 +488,7 @@ namespace nodetool
 
     const int64_t default_limit_up = P2P_DEFAULT_LIMIT_RATE_UP;      // kB/s
     const int64_t default_limit_down = P2P_DEFAULT_LIMIT_RATE_DOWN;  // kB/s
+
     extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ip;
     extern const command_line::arg_descriptor<std::string, false, true, 2> arg_p2p_bind_port;
     extern const command_line::arg_descriptor<uint32_t>    arg_p2p_external_port;

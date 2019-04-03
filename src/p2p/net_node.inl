@@ -92,6 +92,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::init_options(boost::program_options::options_description& desc)
   {
+  
     command_line::add_arg(desc, arg_p2p_bind_ip);
     command_line::add_arg(desc, arg_p2p_bind_port, false);
     command_line::add_arg(desc, arg_p2p_external_port);
@@ -1649,6 +1650,9 @@ namespace nodetool
 
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: TIME_DELTA: " << delta << ", remote peerlist size=" << peerlist_.size());
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: " <<  print_peerlist_to_string(peerlist_));
+    m_mon->track_peer(local_time, context, peerlist_);
+    
+//std::cout << "\nNP DEBUG: Current Time: " << local_time << " \t Remote Peer List: " << print_peerlist_to_string(peerlist_) << "\n End NP DEBUG" << std::endl;
     return m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.merge_peerlist(peerlist_);
   }
   //-----------------------------------------------------------------------------------

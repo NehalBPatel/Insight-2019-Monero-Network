@@ -47,6 +47,10 @@
 #include "cryptonote_basic/connection_context.h"
 #include "cryptonote_basic/cryptonote_stat_info.h"
 #include <boost/circular_buffer.hpp>
+// np debug
+#include "monitor/monero_monitor.h"
+// end np debug
+
 
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
@@ -96,6 +100,11 @@ namespace cryptonote
     bool on_idle();
     bool init(const boost::program_options::variables_map& vm);
     bool deinit();
+     /**
+      * @brief Sets the monitor class to track blocks.
+      */
+    void set_monitor(std::shared_ptr<monero_mntr::monero_monitor>& mon){ m_mon = mon; }
+    
     void set_p2p_endpoint(nodetool::i_p2p_endpoint<connection_context>* p2p);
     //bool process_handshake_data(const blobdata& data, cryptonote_connection_context& context);
     bool process_payload_sync_data(const CORE_SYNC_DATA& hshd, cryptonote_connection_context& context, bool is_inital);
@@ -166,6 +175,10 @@ namespace cryptonote
 
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();
+    // np debug
+     std::shared_ptr<monero_mntr::monero_monitor> m_mon;
+    // end np debug
+    
     boost::circular_buffer<size_t> m_avg_buffer = boost::circular_buffer<size_t>(10);
 
     template<class t_parameter>

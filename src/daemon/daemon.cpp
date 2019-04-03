@@ -42,6 +42,9 @@
 #include "daemon/p2p.h"
 #include "daemon/protocol.h"
 #include "daemon/rpc.h"
+// np debug
+#include "daemon/monitor.h"
+// end np debug
 #include "daemon/command_server.h"
 #include "daemon/command_server.h"
 #include "daemon/command_line_args.h"
@@ -62,6 +65,7 @@ private:
 public:
   t_core core;
   t_p2p p2p;
+  t_mon mon;
   std::vector<std::unique_ptr<t_rpc>> rpcs;
 
   t_internals(
@@ -70,11 +74,14 @@ public:
     : core{vm}
     , protocol{vm, core, command_line::get_arg(vm, cryptonote::arg_offline)}
     , p2p{vm, protocol}
+    , mon{vm}
   {
     // Handle circular dependencies
     protocol.set_p2p_endpoint(p2p.get());
     core.set_protocol(protocol.get());
 
+    p2p.set_monitor(mon.get());
+    
     const auto restricted = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_restricted_rpc);
     const auto main_rpc_port = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
     rpcs.emplace_back(new t_rpc{vm, core, p2p, restricted, main_rpc_port, "core"});
@@ -93,6 +100,7 @@ void t_daemon::init_options(boost::program_options::options_description & option
   t_core::init_options(option_spec);
   t_p2p::init_options(option_spec);
   t_rpc::init_options(option_spec);
+  t_mon::init_options(option_spec);
 }
 
 t_daemon::t_daemon(

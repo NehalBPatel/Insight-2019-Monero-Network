@@ -33,7 +33,9 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "p2p/net_node.h"
 #include "daemon/protocol.h"
-
+// np debug
+#include "monitor/monero_monitor.h"
+// end np debug
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "daemon"
 
@@ -72,7 +74,12 @@ public:
   {
     return m_server;
   }
-
+  // np debug
+  void set_monitor(std::shared_ptr<monero_mntr::monero_monitor>& mon) {
+    m_server.set_monitor(mon);
+  }
+  // end np debug
+  
   void run()
   {
     MGINFO("Starting p2p net loop...");
