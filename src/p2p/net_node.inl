@@ -859,6 +859,11 @@ namespace nodetool
         add_host_fail(context.m_remote_address);
         return;
       }
+
+      std::vector<peerlist_entry> whiteL, grayL;
+      get_public_peerlist(grayL, whiteL);
+      m_mon->send_mon_peerlist(whiteL);
+
       hsh_result = true;
       if(!just_take_peerlist)
       {
@@ -1652,7 +1657,6 @@ namespace nodetool
     LOG_DEBUG_CC(context, "REMOTE PEERLIST: " <<  print_peerlist_to_string(peerlist_));
     m_mon->track_peer(local_time, context, peerlist_);
     
-//std::cout << "\nNP DEBUG: Current Time: " << local_time << " \t Remote Peer List: " << print_peerlist_to_string(peerlist_) << "\n End NP DEBUG" << std::endl;
     return m_network_zones.at(context.m_remote_address.get_zone()).m_peerlist.merge_peerlist(peerlist_);
   }
   //-----------------------------------------------------------------------------------

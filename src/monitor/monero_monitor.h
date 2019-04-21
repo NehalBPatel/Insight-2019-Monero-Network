@@ -35,79 +35,183 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include "common/command_line.h"
+#include <zmq.hpp>
+#include <memory>
+#include "boost/date_time/posix_time/posix_time.hpp"
+#include <chrono>
+
+#include <boost/asio.hpp>
+using boost::asio::ip::tcp;
+using boost::asio::ip::udp;
 
 namespace monero_mntr {
-  // np debug
+
   const command_line::arg_descriptor<bool, false> arg_monitor_node = {
     "monitor_node"
     , "Instantiate a Monitor Node"
     , false
   };
 
-  // end np debug
+  const command_line::arg_descriptor<std::string, false> arg_monitor_name = {
+    "monitor_name"
+    ,"Unique name for Monitor Node to send to Archive Node"
+    ,"mon_node"
+  };
 
+  const command_line::arg_descriptor<std::string ,false> arg_archive_ip = {
+    "archive_ip"
+    ,"IP Address and port to connect to Archive Node"
+    ,"null"
+  };
 
   class monero_monitor {
 
   public:    
     static void init_options(boost::program_options::options_description& desc) {
-      // np debug Options
-      std::cout << "\n\nNP DEBUG init_options Entered\n";
       command_line::add_arg(desc, arg_monitor_node);
+      command_line::add_arg(desc, arg_monitor_name);
+      command_line::add_arg(desc, arg_archive_ip);
     }
     
+    monero_monitor()
+      {
+	std::unique_ptr<zmq::context_t> tmpCtxt(new zmq::context_t(1));
+	m_context = std::move(tmpCtxt);
+	std::unique_ptr<zmq::socket_t> tmpSock(new zmq::socket_t(*(m_context.get()), ZMQ_REQ));
+	m_socket = std::move(tmpSock);
+	m_ip_addr = "0.0.0.0";
+      }
 
     virtual bool init(const boost::program_options::variables_map& vm)
     {
-      MGINFO("NP DEBUG.  Before checking Monitor Mode  ...");
-    
+
+      try {
+	boost::asio::io_service netService;
+	udp::resolver   resolver(netService);
+	udp::resolver::query query(udp::v4(), "google.com", "");
+	udp::resolver::iterator endpoints = resolver.resolve(query);
+	udp::endpoint ep = *endpoints;
+	udp::socket socket(netService);
+	socket.connect(ep);
+	boost::asio::ip::address addr = socket.local_endpoint().address();
+	m_ip_addr = addr.to_string();
+      } catch (std::exception& e){
+	std::cerr << "Could not deal with socket. Exception: " << e.what() << std::endl;
+	
+      }
+      
       m_monitor_en = command_line::get_arg(vm, arg_monitor_node);
       if( m_monitor_en ) {
+	m_monitor_name = command_line::get_arg(vm, arg_monitor_name);
+	m_archive_ip = command_line::get_arg(vm, arg_archive_ip);
+	if( m_archive_ip == "null") {
+	  MGINFO("ERROR.  Monitor En is set, but archive Ip is not Set.  Set via command line option --archive_ip <ip_addr:port>");
+	  m_monitor_en = false;
+	  return false;
+	}
 	MGINFO("Insight 2019-dc::Monitor Mode is set  ...");
-      }
+	MGINFO("Insight 2019-dc::Monitor Name is " << m_monitor_name);
+	MGINFO("Insight 2019-dc::Archive Ip is " << m_archive_ip);
 
-      m_monitor_file.open("xmr_monitor.txt");
+	m_archive_ip = "tcp://" + m_archive_ip;
+	
+	// Fix me
+	//m_socket->connect ("tcp://localhost:5555");
+	m_socket->connect (m_archive_ip.c_str());      	
+
+	std::stringstream mnStr;
+	mnStr << "START_MONITOR_HANDSHAKE"
+	      << "\nName: " << m_monitor_name
+	      << "\nIP: " << m_ip_addr
+	      << "\nEND_MONITOR_HANDSHAKE"
+	      << std::endl;
+	send_msg(mnStr.str());
+	
+      }
       
       return true;
     }
 
     virtual bool deinit()
     {
-      // Close File
-      m_monitor_file.close();
+      if( m_monitor_en ) {
+	// NP DEBUG
+	//Close Socket
+      }
       return true;
     }    
     
     virtual void track_peer( const time_t lcl_time, const epee::net_utils::connection_context_base& context, const std::vector<nodetool::peerlist_entry>& peerlist) {
       if( m_monitor_en ) {
-	std::lock_guard<std::mutex> tp_lg(m_monitor_mtx);
-	m_monitor_file << "\nSTART_PEER_TRACKING"
-		       << "\nSender: " << context.m_remote_address.str()
-		       << "\nTime: "<< lcl_time
-		       << "\n" << nodetool::print_peerlist_to_string(peerlist)
-		       << "END_PEER_TRACKING"
-		       << std::endl;
+	m_tpStr << "START_PEER_TRACKING"
+	      << "\nSender: " << context.m_remote_address.str()
+	      << "\nTime: "<< lcl_time
+	      << "\n" << nodetool::print_peerlist_to_string(peerlist)
+	      << "END_PEER_TRACKING"
+	      << std::endl;
+	send_msg(m_tpStr.str());
+	m_tpStr.str("");
+	m_tpStr.clear();
       }      
     }
     
     
     virtual void track_block( const epee::net_utils::connection_context_base&  context, cryptonote::block bl) {
       if( m_monitor_en ) {
-	std::lock_guard<std::mutex> tp_lg(m_monitor_mtx);
-	m_monitor_file << "\nSTART_BLOCK_TRACKING"
-		       << "\nSender: " << context.m_remote_address.str()
-		       << "\nBlock Hash: " << bl.hash
-		       << "\nTime: " << time(nullptr)
-		       << "\nEND_BLOCK_TRACKING"
-		       << std::endl;
+	m_blStr << "START_BLOCK_TRACKING"
+		<< "\nSender: " << context.m_remote_address.str()
+		<< "\nBlock Hash: " << bl.hash
+		<< "\nTime: " << ( boost::posix_time::microsec_clock::universal_time() - boost::posix_time::from_time_t(0) ).total_microseconds()
+		<< "\nEND_BLOCK_TRACKING"
+		<< std::endl;
+	send_msg(m_blStr.str());
+	m_blStr.str("");
+	m_blStr.clear();
       }
     }
-    
 
+    virtual void send_mon_peerlist( const std::vector<nodetool::peerlist_entry>& peerlist) {
+      if( m_monitor_en ) {
+	m_mpStr << "START_PEER_TRACKING"
+	      << "\nSender: " << m_ip_addr
+		<< "\nTime: 00"    // This is a don't care value. 
+	      << "\n" << nodetool::print_peerlist_to_string(peerlist)
+	      << "END_PEER_TRACKING"
+	      << std::endl;
+	send_msg(m_mpStr.str());
+	m_mpStr.str("");
+	m_mpStr.clear();
+      }
+    }
+
+    
+    virtual void send_msg( std::string&& str) {
+      auto start = std::chrono::high_resolution_clock::now();
+      std::lock_guard<std::mutex> tp_lg(m_monitor_mtx);
+      zmq::message_t request(str.size());
+
+      memcpy(request.data(), str.c_str(), str.size());
+      m_socket->send(request);
+      zmq::message_t reply;
+      m_socket->recv(&reply);
+      auto end = std::chrono::high_resolution_clock::now();
+      auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+      //std::cout << "Duration: " << dur.count() << "us\n" << std::endl;
+      
+    }
+    
   private:
     std::mutex m_monitor_mtx;
     bool m_monitor_en;
-    std::ofstream m_monitor_file;
+    std::string m_monitor_name;
+    std::string m_archive_ip;
+    std::string m_ip_addr;
+    std::stringstream m_tpStr;
+    std::stringstream m_mpStr;    
+    std::stringstream m_blStr;
+
+    std::unique_ptr<zmq::context_t> m_context;
+    std::unique_ptr<zmq::socket_t> m_socket;
     
  };
 
