@@ -51,6 +51,10 @@ nodeLat  = dict(dict())     # Hash of hash.  Key is the Ip Address.  Hash is the
                             # IP Address
 
 latDataStr_mtx = threading.Lock()     # Mutex for accessing blockLat & nodeLat                            
+averageLat = 0
+minLat = 0
+maxLat = 0
+blkCntr = 0
 
 app = dash.Dash(__name__)
 app.config['suppress_callback_exceptions']=True
@@ -63,12 +67,19 @@ def print_posi(poss):
   dbgFile.close()
   
 
+def print_block(latInfo):
+  dbgFile = open("block_latency.txt", "a+")
+  dbgFile.write(latInfo)
+  dbgFile.write("\n")
+  dbgFile.close()
+  
 def parse_peer_tr( msgArr, Gr, ipAddrDict, edgeTracker ):
   peerIpAddr = ""
   peerSenderIpAddr = ""
   global nodeId
   global edgeCntr
   peerNodeId = 0
+  updateGraph = False
   
   for pt_myline in msgArr:
 
@@ -120,6 +131,7 @@ def parse_peer_tr( msgArr, Gr, ipAddrDict, edgeTracker ):
           if not (ipAddrDict[peerIpAddr] in edgeTracker[peerNodeId] ) :
             #print("\n0 Adding Edge between {} and {}".format(peerNodeId, ipAddrDict[peerIpAddr]))
             Gr.add_edge(peerNodeId, ipAddrDict[peerIpAddr])
+            updateGraph = True
             
             edgeTracker[peerNodeId][ipAddrDict[peerIpAddr]] = 1
             edgeTracker[ipAddrDict[peerIpAddr]][peerNodeId] = 1
@@ -144,13 +156,17 @@ def parse_peer_tr( msgArr, Gr, ipAddrDict, edgeTracker ):
             edgeTracker[nodeId][peerNodeId] = 1
             edgeTracker[peerNodeId][nodeId] = 1
             Gr.add_edge(peerNodeId, nodeId)
+            updateGraph = True
+            
             edgeCntr = edgeCntr + 1            
 
           nodeId = nodeId + 1
 
     elif( peer_tr_end.search(pt_myline) != None):
-      print("Peerlist sent by IpAddr : ",peerSenderIpAddr)
-      return
+      #print("Peerlist sent by IpAddr : ",peerSenderIpAddr)
+      break
+    
+  return updateGraph
 
 def parse_block_tr( msgArr ):  
   blSenderIpAddr = ''
@@ -175,7 +191,7 @@ def parse_block_tr( msgArr ):
         blTime = blTimeObj.group(1)
 
     elif( block_tr_end.search(bt_myline) != None):
-      print("\nFound Block Sent by: {}" .format(blSenderIpAddr))
+      #print("\nFound Block Sent by: {}" .format(blSenderIpAddr))
       break
       #return
 
@@ -215,12 +231,19 @@ def process_block_info(senderIpAddr, blockHash, blockTime):
   if( blockFnd ) :
     # Block Hash found.
     #print("Block entry found in Index {}".format(blockIndex))
+
+    # Check if we've already received from this IP Address from another Monitor
+    rcvdAlready = False
+    for elem in blockLat[blockIndex]['node_list'] :
+      if( elem[0] == senderIpAddr ):
+        rcvdAlready = True
       
-    # Append into the array
-    blockLat[blockIndex]['node_list'].append( [senderIpAddr, int(blockTime)] )
+    if not rcvdAlready :
+      # Append into the array
+      blockLat[blockIndex]['node_list'].append( [senderIpAddr, int(blockTime)] )
     
-    # Sort by Time
-    blockLat[blockIndex]['node_list'].sort(key=blockTime_sort)
+      # Sort by Time
+      blockLat[blockIndex]['node_list'].sort(key=blockTime_sort)
 
     
   else :
@@ -247,7 +270,11 @@ def analyze_block():
   global blockLat
   global nodeLat
   global latDataStr_mtx
-
+  global averageLat
+  global minLat
+  global maxLat
+  global blkCntr
+  
   latDataStr_mtx.acquire()
   # We only want to do upto the previous one
   arrLen = len(blockLat) - 1
@@ -261,8 +288,34 @@ def analyze_block():
       blockLat[blIndx]['prop_dly'] = (lastRcvd-firstRcvd)
 
       blockLat[blIndx]['analysis_done'] = True
-      print("Latency for Block {} was {} us".format(blockLat[blIndx]['block_hash'], blockLat[blIndx]['prop_dly']))
-       
+      #print("Latency for Block {} was {} us".format(blockLat[blIndx]['block_hash'], blockLat[blIndx]['prop_dly']))
+      print_block("*********************************************************************************")
+      print_block("Latency for Block {} was {} us\tNumber of Nodes that sent this block {}".format(blockLat[blIndx]['block_hash'], blockLat[blIndx]['prop_dly'], len(blockLat[blIndx]['node_list'])))
+
+      if( minLat == 0 ):
+        minLat = blockLat[blIndx]['prop_dly']
+
+      if( maxLat == 0 ):
+        maxLat = blockLat[blIndx]['prop_dly']
+
+      if( blockLat[blIndx]['prop_dly'] < minLat ) :
+        minLat = blockLat[blIndx]['prop_dly']
+
+      if( blockLat[blIndx]['prop_dly'] > maxLat ) :
+        maxLat = blockLat[blIndx]['prop_dly']
+
+      cummulativeLat = (averageLat*blkCntr) + blockLat[blIndx]['prop_dly']
+      blkCntr = blkCntr + 1
+      averageLat = cummulativeLat/blkCntr
+      print_block("Average Latency for ALL blocks: {} us ({} Blocks)".format(averageLat, blkCntr))
+      print_block("Min Latency from All blocks: {} us\t Max Latency from All blocks: {}".format(minLat, maxLat))
+      # If latency is greater than 15 seconds, then print out the information for debug
+      if blockLat[blIndx]['prop_dly'] > 15000000 :
+        print_block("\n")
+        for xx in blockLat[blIndx]['node_list']:
+          print_block("{}\t Diff: {}".format(str(xx), int(xx[1] - blockLat[blIndx]['node_list'][0][1])))
+        
+      print_block("*********************************************************************************")      
       # Now Store the node information
       for node in blockLat[blIndx]['node_list'] :
         if( node[0] in nodeLat ):
@@ -300,34 +353,37 @@ def parse_monitor_handshake(msgArr, Gr, ipAddrDict, monitorNodes, monitorNames):
   global nodeId
   monName = ''
   monIp = ''
-  
+
   for pm_myline in msgArr:
-    print("\nHandshake: {}", pm_myline)
     
     if( mon_tr_name.search(pm_myline) != None):
       monNameObj = re.search(r"Name: (\w+)", pm_myline, re.M|re.I)
-      print("\nSearching for Name")
+
       if(monNameObj):
         monName = monNameObj.group(1)
-        print("\nSetting Name to {}".format(monName))
         
     elif( mon_tr_ip.search(pm_myline) != None):
       monIpObj = re.search(r"Ip: (\d+\.\d+\.\d+\.\d+)", pm_myline, re.M|re.I)
-      print("\nSearching for Ip")
+
       if(monIpObj):
         monIp = monIpObj.group(1)
-        print("\nSetting Ip to {}".format(monIp))
         
     elif( mon_tr_end.search(pm_myline) != None):
       break
 
   if( monIp !=  '' ):
-    ipAddrDict[monIp] = nodeId
-    monitorNodes.append(nodeId)
-    monitorNames[nodeId] = monName
-    Gr.add_node(nodeId)
-    print("Received Monitor {} w/ Node Id: {} \t w/ Ip Addr: {}".format(monName, nodeId, monIp))
-    nodeId = nodeId + 1
+    if( monIp in ipAddrDict ) :
+      monitorNodes.append(ipAddrDict[monIp])
+      monitorNames[ipAddrDict[monIp]] = monName
+      print("Received Monitor {} w/ Node Id: {} \t w/ Ip Addr: {}".format(monName, ipAddrDict[monIp], monIp))
+
+    else :
+      ipAddrDict[monIp] = nodeId
+      monitorNodes.append(nodeId)
+      monitorNames[nodeId] = monName
+      #Gr.add_node(nodeId)
+      print("Received Monitor {} w/ Node Id: {} \t w/ Ip Addr: {}".format(monName, nodeId, monIp))
+      nodeId = nodeId + 1
   else:
     print("\nmonIp is empty {}".format(monIp))
   
@@ -344,6 +400,7 @@ def update_graph_live(n):
 def process_data():
   global fig
   global data_q
+  
   ipAddrDict = dict()         # Hash of all the Ip Addresses in the Network
 
   edgeTracker = dict(dict())  # Hash of hash for each node.  Key is Ip Address.
@@ -354,7 +411,6 @@ def process_data():
 
   monitorNames = dict()       # Hash of Names of Monitors.  Key is nodeId(Found in monitorNodes)
 
-  
   Gr=nx.Graph()               #  G is an empty Graph
 
   posi=nx.fruchterman_reingold_layout(Gr)
@@ -365,7 +421,7 @@ def process_data():
                    x=Xn, 
                    y=Yn,
                    mode='markers',
-                   marker=dict(size=8, color='rgb(259,65,0)'),
+                   marker=dict(size=6, color='rgb(259,65,0)'),
                    #                text=labels,
                    hoverinfo='text')
 
@@ -395,7 +451,7 @@ def process_data():
   layout=dict(title= gTitle,  
             font= dict(family='Balto'),
             width=2400,
-            height=1600,
+            height=1500,
             autosize=False,
             showlegend=False,
             xaxis=axis,
@@ -413,14 +469,34 @@ def process_data():
       )
         
   fig = dict(data=[trace_edges, trace_nodes], layout=layout)
-
+  loopCntr = 2
   while True:
-    msg_arr = data_q.get()
+    updateGraph = False
 
-    if( peer_tr_st.search(msg_arr[0]) != None):
-      print("Found Start of Peer Tracking")
-      parse_peer_tr(msg_arr, Gr, ipAddrDict, edgeTracker)
+    qSize = data_q.qsize()
 
+    # We want to do batch processing if we can.  If there is nothing to process
+    # then just have the data_q.get() block
+    if( qSize == 0 ):
+      qSize = 1
+    
+    for cntr in range(qSize):
+      msg_arr = data_q.get()
+
+      if( peer_tr_st.search(msg_arr[0]) != None):
+        print("Found Start of Peer Tracking")
+        updateGraph = updateGraph | parse_peer_tr(msg_arr, Gr, ipAddrDict, edgeTracker)
+      elif( block_tr_st.search(msg_arr[0]) != None):
+        print("Found Start of Block Tracking")
+        parse_block_tr(msg_arr)
+      elif( mon_tr_st.search(msg_arr[0]) != None):
+        parse_monitor_handshake(msg_arr, Gr, ipAddrDict, monitorNodes, monitorNames)
+      else:
+        print("Did not Match any String: {}".format(msg_arr[0]));
+
+        data_q.task_done()
+    
+    if( updateGraph ) :
       posi=nx.fruchterman_reingold_layout(G=Gr)
 
       # X & Y coordinates for the normal nodes
@@ -452,7 +528,7 @@ def process_data():
                               x=Xn, 
                               y=Yn,
                               mode='markers',
-                              marker=dict(size=8, color='rgb(259,65,0)'),
+                              marker=dict(size=6, color='rgb(259,65,0)'),
                               #                text=labels,
                               hoverinfo='text')
 
@@ -460,7 +536,7 @@ def process_data():
                               x=Xm, 
                               y=Ym,
                               mode='markers',
-                              marker=dict(size=24, color='rgb(65,105,225)'),
+                              marker=dict(size=18, color='rgb(65,105,225)'),
                               #                text=labels,
                               hoverinfo='text')
 
@@ -491,7 +567,7 @@ def process_data():
           layout=dict(title= gTitle,  
                       font= dict(family='Balto'),
                       width=2400,
-                      height=1600,
+                      height=1500,
                       autosize=False,
                       showlegend=False,
                       xaxis=axis,
@@ -519,15 +595,6 @@ def process_data():
         
 
 
-    elif( block_tr_st.search(msg_arr[0]) != None):
-      #print("Found Start of Block Tracking")
-      parse_block_tr(msg_arr)
-    elif( mon_tr_st.search(msg_arr[0]) != None):
-      parse_monitor_handshake(msg_arr, Gr, ipAddrDict, monitorNodes, monitorNames)
-    else:
-      print("Did not Match any String: {}".format(msg_arr[0]));
-
-    
   return
 
 
