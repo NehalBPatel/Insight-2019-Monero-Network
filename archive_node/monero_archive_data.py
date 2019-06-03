@@ -56,9 +56,6 @@ class monitor_req:
             for cntr in range(32):
                 self.block_hash.append( getattr(blHash, ('block_hash_' + str(cntr)) ) )
 
-            for cntr in range(32):
-                print("Received Hash[{}]: {}".format(cntr, self.block_hash[cntr]))
-            
 
         # Now unpack the Peerlist
         # Only unpack Peer List if Request is of type Peer List Tracking
