@@ -6,6 +6,8 @@ import os
 import queue
 import datetime
 
+from monero_archive_data import monitor_req
+
 import platform
 print(f'Python version: {platform.python_version()}')
 import plotly
@@ -20,19 +22,6 @@ import dash_core_components as dcc
 import dash_html_components as html
 from dash.dependencies import Input, Output
 import zmq
-
-peer_tr_st = re.compile("^START_PEER_TRACKING")
-peer_bl_tr_sendr = re.compile("^Sender: (\d+\.\d+\.\d+\.\d+)");
-peer_tr_list = re.compile("rpc port")
-peer_tr_end = re.compile("^END_PEER_TRACKING")
-block_tr_st = re.compile("^START_BLOCK_TRACKING")
-block_tr_end = re.compile("^END_BLOCK_TRACKING")
-block_tr_hash = re.compile("^Block Hash:")
-peer_bl_tr_time = re.compile("^Time:")
-mon_tr_st = re.compile("^START_MONITOR_HANDSHAKE")
-mon_tr_name = re.compile("^Name: (\w+)");
-mon_tr_ip = re.compile("^IP: (\d+\.\d+\.\d+\.\d+)");
-mon_tr_end = re.compile("^END_MONITOR_HANDSHAKE")
 
 
 fig = dict()
@@ -73,135 +62,60 @@ def print_block(latInfo):
   dbgFile.write("\n")
   dbgFile.close()
   
-def parse_peer_tr( msgArr, Gr, ipAddrDict, edgeTracker ):
-  peerIpAddr = ""
-  peerSenderIpAddr = ""
+def parse_peer_tr( monReq, Gr, ipAddrDict, edgeTracker ):
   global nodeId
   global edgeCntr
   peerNodeId = 0
   updateGraph = False
+
+  # If this is the first time a Sender's IP Addr has been
+  # received, assign it a node Id
+  if( monReq.sender_ip not in ipAddrDict ) :
+    ipAddrDict[monReq.sender_ip] = nodeId
+    nodeId = nodeId + 1
   
-  for pt_myline in msgArr:
+  peerNodeId = ipAddrDict[monReq.sender_ip]    
 
-    if( peer_bl_tr_sendr.search(pt_myline) != None):
-      peerIpAddrObj = re.search( r"Sender: (\d+\.\d+\.\d+\.\d+)", pt_myline, re.M|re.I)
-      if( peerIpAddrObj ):
-        peerSenderIpAddr = peerIpAddrObj.group(1)
-        if peerSenderIpAddr in ipAddrDict:
-          peerNodeId = ipAddrDict[peerSenderIpAddr]
-        else:
-          ipAddrDict[peerSenderIpAddr] = nodeId
-          #print("\n0 Adding Ip Address {} in Dict w/ Node Id: {}".format(peerSenderIpAddr, nodeId))
-          peerNodeId = nodeId
-          nodeId = nodeId + 1
-      
-    elif( peer_bl_tr_time.search(pt_myline) != None):
-      peerTimeObj = re.search( r"Time: (\d+)", pt_myline, re.M|re.I)
+  for cntr in range(monReq.req_len):
+    if( monReq.peerlist[cntr].last_seen_days == 0 and
+        monReq.peerlist[cntr].last_seen_hours == 0):
+
+      # If the Peer Ip Address is not already in ipAddrDict,
+      # Assign it a nodeId
+      if monReq.peerlist[cntr].ip_addr not in ipAddrDict:
+        ipAddrDict[monReq.peerlist[cntr].ip_addr] = nodeId
+        nodeId = nodeId + 1
+
+      plNodeId = ipAddrDict[monReq.peerlist[cntr].ip_addr]
         
-      if( peerTimeObj ) :
-        timeVal = peerTimeObj.group(1)
-           
-    elif( peer_tr_list.search(pt_myline) != None):
-      peerIpObj = re.search(r"^\w+\W+(\d+\.\d+\.\d+\.\d+):", pt_myline, re.M|re.I)
-      peerLastSeenObj = re.search(r"last_seen: d(\d+)\.h(\d+)", pt_myline, re.M|re.I)
-          
-      peerIpAddr = ""
-      lastSeenDay = "99"
-      lastSeenHour = "99"
+      if peerNodeId not in edgeTracker:
+        edgeTracker[peerNodeId] = {}
 
-      if( peerLastSeenObj ):
-        lastSeenDay = peerLastSeenObj.group(1)
-        lastSeenHour = peerLastSeenObj.group(2)        
-      
-      if( (lastSeenDay == '0') and (lastSeenHour == '0') and peerIpObj ) :
-#      if( (lastSeenDay == '0') and peerIpObj ) :
-        peerIpAddr = peerIpObj.group(1)
-        if peerIpAddr in ipAddrDict:
+      if plNodeId not in edgeTracker:
+        edgeTracker[plNodeId] = {}
 
-          # Only add an edge if it hasn't already been added previously
-          if not peerNodeId in edgeTracker :
-            #print("\n0 Adding an Empty Hash for Node Id: {}".format(peerNodeId))
-            edgeTracker[peerNodeId] = {}
+      # Only add an edge if it's not already there.
+      if( plNodeId not in edgeTracker[peerNodeId] ):
+        edgeTracker[plNodeId][peerNodeId] = 1
+        edgeTracker[peerNodeId][plNodeId] = 1
+        Gr.add_edge(peerNodeId, plNodeId)
+        updateGraph = True
+        edgeCntr = edgeCntr + 1            
 
-          if not ipAddrDict[peerIpAddr] in edgeTracker :
-            #print("\n1 Adding an Empty Hash for Node Id: {}".format(ipAddrDict[peerIpAddr]))
-            edgeTracker[ipAddrDict[peerIpAddr]] = {}
-
-              
-          if not (ipAddrDict[peerIpAddr] in edgeTracker[peerNodeId] ) :
-            #print("\n0 Adding Edge between {} and {}".format(peerNodeId, ipAddrDict[peerIpAddr]))
-            Gr.add_edge(peerNodeId, ipAddrDict[peerIpAddr])
-            updateGraph = True
-            
-            edgeTracker[peerNodeId][ipAddrDict[peerIpAddr]] = 1
-            edgeTracker[ipAddrDict[peerIpAddr]][peerNodeId] = 1
-            edgeCntr = edgeCntr + 1
-              
-        else :
-
-          ipAddrDict[peerIpAddr] = nodeId
-          #print("\n1 Adding Ip Address {} in Dict w/ Node Id: {}".format(peerSenderIpAddr, nodeId))
-          
-          # Add the list of nodes that are connected
-          if not peerNodeId in edgeTracker :
-            #print("\n2 Adding an Empty Hash for Node Id: {}".format(peerNodeId))
-            edgeTracker[peerNodeId] = {}
-
-          if not ipAddrDict[peerIpAddr] in edgeTracker :
-            #print("\n2 Adding an Empty Hash for Node Id: {}".format(ipAddrDict[peerIpAddr]))
-            edgeTracker[ipAddrDict[peerIpAddr]] = {}
-              
-          if( not( ipAddrDict[peerIpAddr] in edgeTracker[peerNodeId] ) ):
-            #print("\n1Adding Edge between {} and {}".format(peerNodeId, nodeId))
-            edgeTracker[nodeId][peerNodeId] = 1
-            edgeTracker[peerNodeId][nodeId] = 1
-            Gr.add_edge(peerNodeId, nodeId)
-            updateGraph = True
-            
-            edgeCntr = edgeCntr + 1            
-
-          nodeId = nodeId + 1
-
-    elif( peer_tr_end.search(pt_myline) != None):
-      #print("Peerlist sent by IpAddr : ",peerSenderIpAddr)
-      break
-    
   return updateGraph
 
-def parse_block_tr( msgArr ):  
-  blSenderIpAddr = ''
-  blHash = ''
-  blTime = ''
 
-  for bt_myline in msgArr:
-    if( peer_bl_tr_sendr.search(bt_myline) != None) :
-      blIpaddrObj = re.search(r"Sender: (\d+\.\d+\.\d+\.\d+):", bt_myline, re.M|re.I)
-      if( blIpaddrObj ) :
-        blSenderIpAddr = blIpaddrObj.group(1)
-    elif( block_tr_hash.search(bt_myline) != None) :
-      blHashObj = re.search(r"^Block Hash: <(\w+)>", bt_myline, re.M|re.I)
 
-      if( blHashObj ) :
-        blHash = blHashObj.group(1)
-          
-    elif( peer_bl_tr_time.search(bt_myline) != None) :
-      blTimeObj = re.search(r"^Time: (\d+)", bt_myline, re.M|re.I)
+def parse_block_tr( monReq ):  
+  blockHash = 0
 
-      if( blTimeObj ) :
-        blTime = blTimeObj.group(1)
+  for cntr in range(31,0,-1) :
+    blockHash = blockHash << 8
+    blockHash = blockHash | (monReq.block_hash[cntr] & 0xff)
 
-    elif( block_tr_end.search(bt_myline) != None):
-      #print("\nFound Block Sent by: {}" .format(blSenderIpAddr))
-      break
-      #return
-
-  #print("Ip: {}\t Hash: {} \t Time: {}".format(blSenderIpAddr, blHash, blTime))
-  # We only want to process the data if all information was
-  # properly extracted.
-  if( blSenderIpAddr != '' and
-      blHash != '' and
-      blTime != '' ) :
-    process_block_info(blSenderIpAddr, blHash, blTime)
+  print("Received Block Info w/ Sender Ip: {}\tHash: {}\t Time: {}".format(monReq.sender_ip, blockHash, monReq.cur_time))
+  process_block_info(monReq.sender_ip, blockHash, monReq.cur_time)
+  
     
 def blockTime_sort(bl):
   return bl[1]
@@ -261,8 +175,7 @@ def process_block_info(senderIpAddr, blockHash, blockTime):
   latDataStr_mtx.release()
     
   if( processPrevBlock ):
-    analyze_block()
-    
+    analyze_block()    
   
   return
 
@@ -349,43 +262,23 @@ def analyze_block():
           
   latDataStr_mtx.release()
 
-def parse_monitor_handshake(msgArr, Gr, ipAddrDict, monitorNodes, monitorNames):
+def parse_monitor_handshake(monReq, Gr, ipAddrDict, monitorNodes):
   global nodeId
-  monName = ''
   monIp = ''
 
-  for pm_myline in msgArr:
+  monIp = monReq.mon_ip_h
+  monIp = (monIp << 32) | monReq.mon_ip_l
+      
+  if( monIp in ipAddrDict ) :
+    monitorNodes.append(ipAddrDict[monIp])
+    print("Received Monitor w/ Node Id: {} \t w/ Ip Addr: {}".format( ipAddrDict[monIp], monIp))
     
-    if( mon_tr_name.search(pm_myline) != None):
-      monNameObj = re.search(r"Name: (\w+)", pm_myline, re.M|re.I)
-
-      if(monNameObj):
-        monName = monNameObj.group(1)
-        
-    elif( mon_tr_ip.search(pm_myline) != None):
-      monIpObj = re.search(r"Ip: (\d+\.\d+\.\d+\.\d+)", pm_myline, re.M|re.I)
-
-      if(monIpObj):
-        monIp = monIpObj.group(1)
-        
-    elif( mon_tr_end.search(pm_myline) != None):
-      break
-
-  if( monIp !=  '' ):
-    if( monIp in ipAddrDict ) :
-      monitorNodes.append(ipAddrDict[monIp])
-      monitorNames[ipAddrDict[monIp]] = monName
-      print("Received Monitor {} w/ Node Id: {} \t w/ Ip Addr: {}".format(monName, ipAddrDict[monIp], monIp))
-
-    else :
-      ipAddrDict[monIp] = nodeId
-      monitorNodes.append(nodeId)
-      monitorNames[nodeId] = monName
-      #Gr.add_node(nodeId)
-      print("Received Monitor {} w/ Node Id: {} \t w/ Ip Addr: {}".format(monName, nodeId, monIp))
-      nodeId = nodeId + 1
-  else:
-    print("\nmonIp is empty {}".format(monIp))
+  else :
+    ipAddrDict[monIp] = nodeId
+    monitorNodes.append(nodeId)
+    #Gr.add_node(nodeId)
+    print("Received Monitor w/ Node Id: {} \t w/ Ip Addr: {}".format( nodeId, monIp))
+    nodeId = nodeId + 1
   
 
     
@@ -408,8 +301,6 @@ def process_data():
                               # are connected to that IP Address
 
   monitorNodes = []           # Array of Monitors
-
-  monitorNames = dict()       # Hash of Names of Monitors.  Key is nodeId(Found in monitorNodes)
 
   Gr=nx.Graph()               #  G is an empty Graph
 
@@ -481,18 +372,18 @@ def process_data():
       qSize = 1
     
     for cntr in range(qSize):
-      msg_arr = data_q.get()
+      mon_req = data_q.get()
 
-      if( peer_tr_st.search(msg_arr[0]) != None):
+      if( mon_req.req_type == 1):
         print("Found Start of Peer Tracking")
-        updateGraph = updateGraph | parse_peer_tr(msg_arr, Gr, ipAddrDict, edgeTracker)
-      elif( block_tr_st.search(msg_arr[0]) != None):
+        updateGraph = updateGraph | parse_peer_tr(mon_req, Gr, ipAddrDict, edgeTracker)
+      elif( mon_req.req_type == 2):
         print("Found Start of Block Tracking")
-        parse_block_tr(msg_arr)
-      elif( mon_tr_st.search(msg_arr[0]) != None):
-        parse_monitor_handshake(msg_arr, Gr, ipAddrDict, monitorNodes, monitorNames)
+        parse_block_tr(mon_req)
+      elif( mon_req.req_type == 0):
+        parse_monitor_handshake(mon_req, Gr, ipAddrDict, monitorNodes)
       else:
-        print("Did not Match any String: {}".format(msg_arr[0]));
+        print("mon_req.req_type Did not Match any known : {}".format(mon_req.req_type));
 
         data_q.task_done()
     
@@ -603,23 +494,19 @@ def process_socket():
   global data_q
   
   while True:  
-    message = b'Hello'
 
     message = socket.recv()
-    
     socket.send(b"ok")
 
-    msg_str = str(message,'utf-8')
-    msg_arr = msg_str.split('\n')  
-    data_q.put(msg_arr)
+    mon_req = monitor_req(message)
+    data_q.put(mon_req)
   
-
 if __name__ == '__main__':
   if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
 
     print("Binding Socket")
     try:
-      socket.bind("tcp://*:5555")
+      socket.bind("tcp://*:5565")
       socket_thr = threading.Thread(target=process_socket)
       socket_thr.daemon = True
       data_prc_thr = threading.Thread(target=process_data)

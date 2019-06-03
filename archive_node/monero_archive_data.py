@@ -50,20 +50,26 @@ class monitor_req:
         blHashTpl = namedtuple('blHash', blHashArrName)
         blHash = blHashTpl._make(unpack_from(blHashFormat, message, msg_offset))
         msg_offset = msg_offset + 32
-        
-        for cntr in range(32):
-            self.block_hash.append( getattr(blHash, ('block_hash_' + str(cntr)) ) )
+
+        # Only unpack Block Hash if Request is of type Block Tracking
+        if( self.req_type == 2 ) :
+            for cntr in range(32):
+                self.block_hash.append( getattr(blHash, ('block_hash_' + str(cntr)) ) )
+
+            for cntr in range(32):
+                print("Received Hash[{}]: {}".format(cntr, self.block_hash[cntr]))
             
 
         # Now unpack the Peerlist
-        plFormat = 'IBBBB'
-        plTpl = namedtuple('peerlist_entry', ['ip_addr', 'last_seen_days', 'last_seen_hours', 'last_seen_minutes', 'last_seen_seconds'])
+        # Only unpack Peer List if Request is of type Peer List Tracking
+        if( self.req_type == 1 ) :
+            plFormat = 'IBBBB'
+            plTpl = namedtuple('peerlist_entry', ['ip_addr', 'last_seen_days', 'last_seen_hours', 'last_seen_minutes', 'last_seen_seconds'])
 
-        for cntr in range(self.req_len):
-            pl = plTpl._make(unpack_from(plFormat, message, msg_offset))
-            msg_offset = msg_offset + 8
-            self.peerlist.append(peerlist_info(pl.ip_addr, pl.last_seen_days, pl.last_seen_hours, pl.last_seen_minutes, pl.last_seen_seconds))
-            print("Peerlist[{}]: Ip Addr: {} \t LSD: {}   LSH: {}   LSM: {}    LSS: {}".format(cntr, self.peerlist[-1].ip_addr, self.peerlist[-1].last_seen_days, self.peerlist[-1].last_seen_hours, self.peerlist[-1].last_seen_minutes, self.peerlist[-1].last_seen_seconds))
+            for cntr in range(self.req_len):
+                pl = plTpl._make(unpack_from(plFormat, message, msg_offset))
+                msg_offset = msg_offset + 8
+                self.peerlist.append(peerlist_info(pl.ip_addr, pl.last_seen_days, pl.last_seen_hours, pl.last_seen_minutes, pl.last_seen_seconds))
 
             
     
